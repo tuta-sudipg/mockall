@@ -15,8 +15,8 @@ use cfg_if::cfg_if;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::{
+    spanned::Spanned,
     *,
-    spanned::Spanned
 };
 
 cfg_if! {
@@ -46,13 +46,13 @@ fn do_double(_attrs: TokenStream, input: TokenStream) -> TokenStream {
         Item::Type(item_type) => mock_itemtype(item_type),
         _ => {
             compile_error(item.span(),
-                "Only use statements and type aliases may be doubled");
+                          "Only use statements and type aliases may be doubled");
         }
     };
     quote!(
-        #[cfg(not(test))]
+        #[cfg(not(feature = "mockall"))]
         #input
-        #[cfg(test)]
+        #[cfg(feature = "mockall")]
         #item
     )
 }
@@ -155,7 +155,7 @@ fn do_double(_attrs: TokenStream, input: TokenStream) -> TokenStream {
 ///
 #[proc_macro_attribute]
 pub fn double(attrs: proc_macro::TokenStream, input: proc_macro::TokenStream)
-    -> proc_macro::TokenStream
+              -> proc_macro::TokenStream
 {
     do_double(attrs.into(), input.into()).into()
 }
@@ -173,7 +173,7 @@ fn mock_itemtype(orig: &mut ItemType) {
 fn mock_itemuse(orig: &mut ItemUse) {
     if let UseTree::Name(un) = &orig.tree {
         compile_error(un.span(),
-            "Cannot double types in the current module.  Use a submodule (use foo::Foo) or a rename (use Foo as Bar)");
+                      "Cannot double types in the current module.  Use a submodule (use foo::Foo) or a rename (use Foo as Bar)");
     } else {
         mock_usetree(&mut orig.tree)
     }
@@ -198,26 +198,26 @@ fn mock_usetree(mut orig: &mut UseTree) {
     match &mut orig {
         UseTree::Glob(star) => {
             compile_error(star.span(),
-                "Cannot double glob imports.  Import by fully qualified name instead.");
-        },
+                          "Cannot double glob imports.  Import by fully qualified name instead.");
+        }
         UseTree::Group(ug) => {
             for ut in ug.items.iter_mut() {
                 mock_usetree(ut);
             }
-        },
+        }
         UseTree::Name(un) => {
             *orig = UseTree::Rename(UseRename {
                 ident: mock_ident(&un.ident),
                 as_token: <Token![as]>::default(),
-                rename: un.ident.clone()
+                rename: un.ident.clone(),
             });
-        },
+        }
         UseTree::Path(up) => {
             mock_usetree(up.tree.as_mut());
-        },
+        }
         UseTree::Rename(ur) => {
             ur.ident = mock_ident(&ur.ident)
-        },
+        }
     }
 }
 
@@ -225,39 +225,39 @@ fn mock_usetree(mut orig: &mut UseTree) {
 mod t {
     use super::*;
 
-mod double {
-    use super::*;
-    use std::str::FromStr;
+    mod double {
+        use super::*;
+        use std::str::FromStr;
 
-    fn cmp(attrs: &str, code: &str, expected: &str) {
-        let attrs_ts = TokenStream::from_str(attrs).unwrap();
-        let code_ts = TokenStream::from_str(code).unwrap();
-        let output = do_double(attrs_ts, code_ts);
-        let output = output.to_string();
-        // Round-trip expected through proc_macro2 so whitespace will be
-        // identically formatted
-        let expected = TokenStream::from_str(expected)
-            .unwrap()
-            .to_string();
-        assert_eq!(output, expected);
-    }
+        fn cmp(attrs: &str, code: &str, expected: &str) {
+            let attrs_ts = TokenStream::from_str(attrs).unwrap();
+            let code_ts = TokenStream::from_str(code).unwrap();
+            let output = do_double(attrs_ts, code_ts);
+            let output = output.to_string();
+            // Round-trip expected through proc_macro2 so whitespace will be
+            // identically formatted
+            let expected = TokenStream::from_str(expected)
+                .unwrap()
+                .to_string();
+            assert_eq!(output, expected);
+        }
 
-    #[test]
-    #[should_panic(expected = "Cannot double glob")]
-    fn glob() {
-        let code = "use foo::*;";
-        cmp("", code, "");
-    }
+        #[test]
+        #[should_panic(expected = "Cannot double glob")]
+        fn glob() {
+            let code = "use foo::*;";
+            cmp("", code, "");
+        }
 
-    #[test]
-    fn group() {
-        let code = "
+        #[test]
+        fn group() {
+            let code = "
             use foo::bar::{
                 Baz,
                 Bean
             };
         ";
-        let expected = "
+            let expected = "
             #[cfg(not(test))]
             use foo::bar::{
                 Baz,
@@ -269,81 +269,81 @@ mod double {
                 MockBean as Bean
             };
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    fn module() {
-        let code = "use foo::bar;";
-        let expected = "
+        #[test]
+        fn module() {
+            let code = "use foo::bar;";
+            let expected = "
             #[cfg(not(test))]
             use foo::bar;
             #[cfg(test)]
             use foo::mock_bar as bar;
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    #[should_panic(expected = "Cannot double types in the current module")]
-    fn name() {
-        let code = "use Foo;";
-        cmp("", code, "");
-    }
+        #[test]
+        #[should_panic(expected = "Cannot double types in the current module")]
+        fn name() {
+            let code = "use Foo;";
+            cmp("", code, "");
+        }
 
-    #[test]
-    fn path() {
-        let code = "use foo::bar::Baz;";
-        let expected = "
+        #[test]
+        fn path() {
+            let code = "use foo::bar::Baz;";
+            let expected = "
             #[cfg(not(test))]
             use foo::bar::Baz;
             #[cfg(test)]
             use foo::bar::MockBaz as Baz;
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    fn pub_use() {
-        let code = "pub use foo::bar;";
-        let expected = "
+        #[test]
+        fn pub_use() {
+            let code = "pub use foo::bar;";
+            let expected = "
             #[cfg(not(test))]
             pub use foo::bar;
             #[cfg(test)]
             pub use foo::mock_bar as bar;
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    fn rename() {
-        let code = "use Foo as Bar;";
-        let expected = "
+        #[test]
+        fn rename() {
+            let code = "use Foo as Bar;";
+            let expected = "
             #[cfg(not(test))]
             use Foo as Bar;
             #[cfg(test)]
             use MockFoo as Bar;
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    fn type_() {
-        let code = "type Foo = bar::Baz;";
-        let expected = "
+        #[test]
+        fn type_() {
+            let code = "type Foo = bar::Baz;";
+            let expected = "
             #[cfg(not(test))]
             type Foo = bar::Baz;
             #[cfg(test)]
             type Foo = bar::MockBaz;
         ";
-        cmp("", code, expected);
-    }
+            cmp("", code, expected);
+        }
 
-    #[test]
-    #[should_panic(expected = "Only use statements and type aliases")]
-    fn undoubleable() {
-        let code = "struct Foo{}";
-        cmp("", code, "");
+        #[test]
+        #[should_panic(expected = "Only use statements and type aliases")]
+        fn undoubleable() {
+            let code = "struct Foo{}";
+            cmp("", code, "");
+        }
     }
-}
 }
